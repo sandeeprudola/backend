@@ -15,7 +15,8 @@ const signupSchema=zod.object({
     password:zod.string(),
     firstName:zod.string(),
     lastName:zod.string(),
-    role:zod.string()
+    role: zod.enum(["hearing","speech","both"])
+
 })
 
 router.post("/signup",async(req,res)=>{
@@ -117,7 +118,8 @@ router.put("/update",authmiddleware(),async(req,res)=>{
 
 router.get("/dashboard",authmiddleware(),async(req,res)=>{
     try{
-        const user=await User.findById(req.user.id).select("firstName lastName email")
+        const user = await User.findById(req.user.id)
+  .select("firstName lastName email role");
         
         const nextAppointment=await Appointment.findOne({
             patient:req.user.id,
@@ -131,10 +133,15 @@ router.get("/dashboard",authmiddleware(),async(req,res)=>{
         })
 
         res.json({
-            user,
+            user:{
+              firstName:user.firstName,
+              lastName:user.lastName,
+              email:user.email,
+              role:user.role
+            },
             nextAppointment,
-            totalAppointments,
-        })
+            totalAppointments
+          })
     }
     catch(err){
         res.status(500).json({
@@ -143,6 +150,18 @@ router.get("/dashboard",authmiddleware(),async(req,res)=>{
     }
 })
 
-
+router.get("/appointments",authmiddleware(),async(req,res)=>{
+    try{
+        const appointments=await Appointment.findOne({
+            patient:req.user.id
+        })
+        .sort
+    }
+    catch(err){
+        res.status(500).json({
+            msg:"internal server error"
+        })
+    }
+})
 
 module.exports=router;
