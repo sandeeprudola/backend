@@ -1,11 +1,13 @@
 const express=require('express');
 const User=require('../models/User')
+const Appointment=require("../models/Appointment")
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
 const bcrypt=require('bcryptjs')
 const jwt = require('jsonwebtoken');
 const authmiddleware=require('../middlewares/authmiddleware')
+
 
 const signupSchema=zod.object({
     username:zod.string(),
@@ -93,7 +95,7 @@ router.post("/signin",async(req,res)=>{
     firstName:zod.string(),
     lastName:zod.string()
   })
-router.put("/update",authmiddleware,async(req,res)=>{
+router.put("/update",authmiddleware(),async(req,res)=>{
    try{
     const {success}=update.safeParse(req.body);
     if(!success){
@@ -111,6 +113,34 @@ router.put("/update",authmiddleware,async(req,res)=>{
      res.status(400).json({msg:"error while auth"})
    }
 
+})
+
+router.get("/dashboard",authmiddleware(),async(req,res)=>{
+    try{
+        const user=await User.findById(req.user.id).select("firstName lastName email")
+        
+        const nextAppointment=await Appointment.findOne({
+            patient:req.user.id,
+            appointmentdate: {$gte: new Date() }
+        })
+        .sort({appointmentdate:1})
+        .populate("staff","firstName lastName specialization")
+
+        const totalAppointments=await Appointment.countDocuments({
+            patient:req.user.id
+        })
+
+        res.json({
+            user,
+            nextAppointment,
+            totalAppointments,
+        })
+    }
+    catch(err){
+        res.status(500).json({
+            msg:"internal server error"
+        })
+    }
 })
 
 
