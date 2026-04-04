@@ -43,12 +43,13 @@ router.post('/items', adminAuth, async (req, res) => {
     }
 });
 
-// employee logs stock in
+// employee logs stock in (use `sku` from dropdown — short code; optional `itemId`)
 router.post('/log-in', authmiddleware(['therapist', 'audiologist', 'receptionist']), async (req, res) => {
     try {
-        const { itemId, quantity, note } = req.body || {};
+        const { itemId, sku, quantity, note } = req.body || {};
         const result = await logInventoryIn({
             itemId,
+            sku,
             quantity: Number(quantity),
             note,
             actorId: req.user.id,
@@ -69,9 +70,10 @@ router.post('/log-in', authmiddleware(['therapist', 'audiologist', 'receptionist
 // admin logs stock in (same shared service)
 router.post('/admin/log-in', adminAuth, async (req, res) => {
     try {
-        const { itemId, quantity, note } = req.body || {};
+        const { itemId, sku, quantity, note } = req.body || {};
         const result = await logInventoryIn({
             itemId,
+            sku,
             quantity: Number(quantity),
             note,
             actorId: req.admin._id,

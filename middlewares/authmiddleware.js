@@ -15,8 +15,11 @@ function authmiddleware(roles=[]){
         try{
             const decoded = jwt.verify(token,JWT_SECRET);
 
+            // Employee tokens use userId; some routes use id/userid — normalize so req.user.id is always the subject
+            const subjectId = decoded.userId ?? decoded.userid ?? decoded.id;
+
             req.user={
-                id:decoded.userId,
+                id: subjectId,
                 role:decoded.role,
             }
             if (roles.length && !roles.includes(req.user.role)) {
