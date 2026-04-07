@@ -15,8 +15,9 @@ const signupSchema=zod.object({
     password:zod.string(),
     firstName:zod.string(),
     lastName:zod.string(),
-    role: zod.enum(["hearing","speech","both"])
-
+    role: zod.enum(["hearing","speech","both"]),
+    HearingServices:zod.enum(['None','a','b','c']),
+    SpeechServices:zod.enum(['None','a','b','c']),
 })
 
 router.post("/signup",async(req,res)=>{
@@ -33,7 +34,7 @@ router.post("/signup",async(req,res)=>{
         return res.status(411).json("email/username already taken or incorrect credentials")
     }
     
-    const { username,email,password, firstName, lastName, role } = body;
+    const { username,email,password, firstName, lastName, role,HearingServices,SpeechServices } = body;
     const hashedpassword= await bcrypt.hash(password,10);
     const user=new User({
         username,
@@ -41,13 +42,18 @@ router.post("/signup",async(req,res)=>{
         password: hashedpassword,
         firstName,
         lastName,
-        role
+        role,
+        HearingServices,
+        SpeechServices
+
     })
 
     await user.save();
     const token=jwt.sign({
         userId:user._id,
-        role:user.role
+        role:user.role,
+        HearingServices:user.HearingServices,
+        SpeechServices:user.SpeechServices,
     },JWT_SECRET)
 
     res.status(200).json({message:"user created successfully",token})
@@ -150,18 +156,6 @@ router.get("/dashboard",authmiddleware(),async(req,res)=>{
     }
 })
 
-router.get("/appointments",authmiddleware(),async(req,res)=>{
-    try{
-        const appointments=await Appointment.findOne({
-            patient:req.user.id
-        })
-        .sort
-    }
-    catch(err){
-        res.status(500).json({
-            msg:"internal server error"
-        })
-    }
-})
+
 
 module.exports=router;

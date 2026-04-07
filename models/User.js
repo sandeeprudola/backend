@@ -40,6 +40,16 @@ const UserSchema=new mongoose.Schema({
         type:String,
         enum: ['hearing', 'speech', 'both'],
         required:true
+    },
+    HearingServices:{
+        type:String,
+        enum:['None','a','b','c'],
+        required:true,
+    },
+    SpeechServices:{
+        type:String,
+        enum:['None','a','b','c'],
+        required:true,
     }
 })
 module.exports=mongoose.model("User",UserSchema)
