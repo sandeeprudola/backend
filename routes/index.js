@@ -5,6 +5,7 @@ const adminRouter=require("./admin");
 const appointment=require("./appointment")
 const attendance=require("./attendance")
 const inventory=require("./inventory")
+const sale=require("./sale")
 
 const router=express.Router();
 
@@ -14,5 +15,6 @@ router.use("/employee",employeeRouter)
 router.use("/appointment",appointment)
 router.use("/attendance",attendance)
 router.use("/inventory",inventory)
+router.use("/sale",sale)
 
 module.exports=router;

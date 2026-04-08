@@ -1,6 +1,7 @@
 const express=require('express');
 const User=require('../models/User')
 const Appointment=require("../models/Appointment")
+const Sale = require('../models/Sale');
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
@@ -152,6 +153,30 @@ router.get("/dashboard",authmiddleware(),async(req,res)=>{
     catch(err){
         res.status(500).json({
             msg:"internal server error"
+        })
+    }
+})
+
+router.get('/sales', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id firstName lastName email');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const sales = await Sale.find({ patient: user._id })
+            .sort({ saleDate: -1, createdAt: -1 })
+            .populate('soldByEmp', 'firstName lastName role');
+
+        return res.status(200).json({
+            user,
+            sales,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user sales",
+            error: err.message
         })
     }
 })
