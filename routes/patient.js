@@ -1,4 +1,6 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const zod = require('zod');
@@ -40,6 +42,18 @@ const profileSchema = zod.object({
     assignedAudiologist: zod.string().trim().min(1).optional(),
     caseStatus: zod.enum(['active', 'on-hold', 'completed', 'dropped']).optional(),
     nextFollowUpDate: zod.string().datetime().optional(),
+});
+
+const createPatientSchema = zod.object({
+    username: zod.string().trim().min(3).max(30),
+    email: zod.string().trim().email(),
+    password: zod.string().min(6).optional(),
+    firstName: zod.string().trim().min(1).max(30),
+    lastName: zod.string().trim().max(30).optional(),
+    role: zod.enum(['hearing', 'speech', 'both']),
+    HearingServices: zod.enum(['None', 'a', 'b', 'c']),
+    SpeechServices: zod.enum(['None', 'a', 'b', 'c']),
+    profile: profileSchema.optional(),
 });
 
 function parsePagination(req) {
@@ -145,6 +159,81 @@ async function validateAssignedStaff({ assignedTherapist, assignedAudiologist })
 
     return null;
 }
+
+router.post('/', canWritePatients, async (req, res) => {
+    try {
+        const parsed = createPatientSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({
+                msg: 'invalid patient data',
+                errors: parsed.error.flatten(),
+            });
+        }
+
+        const data = parsed.data;
+        const existingPatient = await User.findOne({
+            $or: [{ username: data.username }, { email: data.email }],
+        }).select('_id username email');
+
+        if (existingPatient) {
+            return res.status(409).json({ msg: 'patient username or email already exists' });
+        }
+
+        if (data.profile) {
+            const staffError = await validateAssignedStaff(data.profile);
+            if (staffError) {
+                return res.status(400).json({ msg: staffError });
+            }
+        }
+
+        const temporaryPassword = data.password || crypto.randomBytes(6).toString('base64url');
+        const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+
+        const patient = await User.create({
+            username: data.username,
+            email: data.email,
+            password: hashedPassword,
+            firstName: data.firstName,
+            lastName: data.lastName || '',
+            role: data.role,
+            HearingServices: data.HearingServices,
+            SpeechServices: data.SpeechServices,
+        });
+
+        let profile = null;
+        if (data.profile) {
+            const payload = buildProfilePayload(data.profile);
+            if (Object.values(payload).includes(null)) {
+                return res.status(400).json({ msg: 'one or more provided dates are invalid' });
+            }
+
+            profile = await PatientProfile.create({
+                user: patient._id,
+                ...payload,
+            });
+
+            await profile.populate([
+                { path: 'assignedTherapist', select: 'firstName lastName role specialization' },
+                { path: 'assignedAudiologist', select: 'firstName lastName role specialization' },
+            ]);
+        }
+
+        const patientResponse = patient.toObject();
+        delete patientResponse.password;
+
+        return res.status(201).json({
+            msg: 'patient created successfully',
+            patient: patientResponse,
+            profile,
+            temporaryPassword: data.password ? undefined : temporaryPassword,
+        });
+    } catch (err) {
+        return res.status(500).json({
+            msg: 'failed to create patient',
+            error: err.message,
+        });
+    }
+});
 
 router.get('/', canReadPatients, async (req, res) => {
     try {
