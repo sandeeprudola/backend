@@ -6,6 +6,7 @@ const appointment=require("./appointment")
 const attendance=require("./attendance")
 const inventory=require("./inventory")
 const sale=require("./sale")
+const patient=require("./patient")
 
 const router=express.Router();
 
@@ -16,5 +17,6 @@ router.use("/appointment",appointment)
 router.use("/attendance",attendance)
 router.use("/inventory",inventory)
 router.use("/sale",sale)
+router.use("/patients",patient)
 
 module.exports=router;

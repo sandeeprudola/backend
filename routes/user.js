@@ -2,12 +2,82 @@ const express=require('express');
 const User=require('../models/User')
 const Appointment=require("../models/Appointment")
 const Sale = require('../models/Sale');
+const PatientProfile = require('../models/PatientProfile');
+const Emp = require('../models/Emp');
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
 const bcrypt=require('bcryptjs')
 const jwt = require('jsonwebtoken');
 const authmiddleware=require('../middlewares/authmiddleware')
+
+const patientProfileSchema = zod.object({
+    phone: zod.string().trim().max(20).optional(),
+    alternatePhone: zod.string().trim().max(20).optional(),
+    gender: zod.enum(['male', 'female', 'other', 'prefer-not-to-say']).optional(),
+    dob: zod.string().datetime().optional(),
+    guardianName: zod.string().trim().max(100).optional(),
+    relationWithPatient: zod.string().trim().max(80).optional(),
+    emergencyContactName: zod.string().trim().max(100).optional(),
+    emergencyContactPhone: zod.string().trim().max(20).optional(),
+    addressLine1: zod.string().trim().max(200).optional(),
+    addressLine2: zod.string().trim().max(200).optional(),
+    city: zod.string().trim().max(80).optional(),
+    state: zod.string().trim().max(80).optional(),
+    pincode: zod.string().trim().max(12).optional(),
+    leadSource: zod.string().trim().max(100).optional(),
+    referredBy: zod.string().trim().max(100).optional(),
+    primaryConcern: zod.enum(['hearing', 'speech', 'both', 'other']).optional(),
+    diagnosis: zod.string().trim().max(500).optional(),
+    medicalHistory: zod.string().trim().max(1500).optional(),
+    clinicalNotes: zod.string().trim().max(2000).optional(),
+    assignedTherapist: zod.string().trim().min(1).optional(),
+    assignedAudiologist: zod.string().trim().min(1).optional(),
+    caseStatus: zod.enum(['active', 'on-hold', 'completed', 'dropped']).optional(),
+    nextFollowUpDate: zod.string().datetime().optional(),
+});
+
+function parseProfileDate(value) {
+    if (!value) {
+        return undefined;
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return null;
+    }
+
+    return parsed;
+}
+
+async function validateAssignedStaff({ assignedTherapist, assignedAudiologist }) {
+    if (assignedTherapist) {
+        const therapist = await Emp.findOne({ _id: assignedTherapist, role: 'therapist', isActive: true }).select('_id');
+        if (!therapist) {
+            return 'assignedTherapist must be an active therapist';
+        }
+    }
+
+    if (assignedAudiologist) {
+        const audiologist = await Emp.findOne({ _id: assignedAudiologist, role: 'audiologist', isActive: true }).select('_id');
+        if (!audiologist) {
+            return 'assignedAudiologist must be an active audiologist';
+        }
+    }
+
+    return null;
+}
+
+function buildProfilePayload(data) {
+    const payload = { ...data };
+    if (data.dob) {
+        payload.dob = parseProfileDate(data.dob);
+    }
+    if (data.nextFollowUpDate) {
+        payload.nextFollowUpDate = parseProfileDate(data.nextFollowUpDate);
+    }
+    return payload;
+}
 
 
 const signupSchema=zod.object({
@@ -125,16 +195,87 @@ router.put("/update",authmiddleware(),async(req,res)=>{
 
 router.get('/me', authmiddleware(), async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('_id username email firstName lastName role');
+        const user = await User.findById(req.user.id).select('_id username email firstName lastName role HearingServices SpeechServices');
         if (!user) {
             return res.status(404).json({ msg: 'user not found' });
         }
 
-        return res.status(200).json({ user });
+        const profile = await PatientProfile.findOne({ user: user._id })
+            .populate('assignedTherapist', 'firstName lastName role specialization')
+            .populate('assignedAudiologist', 'firstName lastName role specialization');
+
+        return res.status(200).json({ user, profile });
     }
     catch(err){
         return res.status(500).json({
             msg:"failed to fetch user profile",
+            error: err.message
+        })
+    }
+})
+
+router.get('/profile', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id username email firstName lastName role HearingServices SpeechServices');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const profile = await PatientProfile.findOne({ user: user._id })
+            .populate('assignedTherapist', 'firstName lastName role specialization')
+            .populate('assignedAudiologist', 'firstName lastName role specialization');
+
+        return res.status(200).json({ user, profile });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch patient profile",
+            error: err.message
+        })
+    }
+})
+
+router.put('/profile', authmiddleware(), async (req, res) => {
+    try {
+        const parsed = patientProfileSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({
+                msg: 'invalid patient profile data',
+                errors: parsed.error.flatten(),
+            });
+        }
+
+        const user = await User.findById(req.user.id).select('_id');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const staffError = await validateAssignedStaff(parsed.data);
+        if (staffError) {
+            return res.status(400).json({ msg: staffError });
+        }
+
+        const payload = buildProfilePayload(parsed.data);
+        if (Object.values(payload).includes(null)) {
+            return res.status(400).json({ msg: 'one or more provided dates are invalid' });
+        }
+
+        const profile = await PatientProfile.findOneAndUpdate(
+            { user: user._id },
+            { $set: payload, $setOnInsert: { user: user._id } },
+            { new: true, upsert: true, runValidators: true }
+        )
+            .populate('assignedTherapist', 'firstName lastName role specialization')
+            .populate('assignedAudiologist', 'firstName lastName role specialization');
+
+        return res.status(200).json({
+            msg: 'patient profile saved successfully',
+            profile,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to save patient profile",
             error: err.message
         })
     }
