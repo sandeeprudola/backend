@@ -5,6 +5,7 @@ const Sale = require('../models/Sale');
 const PatientProfile = require('../models/PatientProfile');
 const Emp = require('../models/Emp');
 const Payment = require('../models/Payment');
+const ServiceTicket = require('../models/ServiceTicket');
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
@@ -387,6 +388,42 @@ router.get('/payments', authmiddleware(), async (req, res) => {
     catch(err){
         return res.status(500).json({
             msg:"failed to fetch user payments",
+            error: err.message
+        })
+    }
+})
+
+router.get('/service-tickets', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id firstName lastName email');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const { status, type } = req.query;
+        const query = { patient: user._id };
+        if (status) {
+            query.status = status;
+        }
+        if (type) {
+            query.type = type;
+        }
+
+        const tickets = await ServiceTicket.find(query)
+            .sort({ createdAt: -1 })
+            .populate('sale', 'brand model serialNumber finalAmount paymentMode')
+            .populate('assignedTo', 'firstName lastName role specialization')
+            .populate('createdByEmp', 'firstName lastName role')
+            .populate('createdByAdmin', 'firstName lastName role');
+
+        return res.status(200).json({
+            user,
+            tickets,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user service tickets",
             error: err.message
         })
     }
