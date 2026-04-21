@@ -10,6 +10,8 @@ const patient=require("./patient")
 const payment=require("./payment")
 const serviceTicket=require("./serviceTicket")
 const reminder=require("./reminder")
+const emi=require("./emi")
+const report=require("./report")
 
 const router=express.Router();
 
@@ -24,5 +26,7 @@ router.use("/patients",patient)
 router.use("/payments",payment)
 router.use("/service-tickets",serviceTicket)
 router.use("/reminders",reminder)
+router.use("/emi",emi)
+router.use("/reports",report)
 
 module.exports=router;

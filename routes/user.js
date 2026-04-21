@@ -6,6 +6,7 @@ const PatientProfile = require('../models/PatientProfile');
 const Emp = require('../models/Emp');
 const Payment = require('../models/Payment');
 const ServiceTicket = require('../models/ServiceTicket');
+const EmiInstallment = require('../models/EmiInstallment');
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
@@ -424,6 +425,31 @@ router.get('/service-tickets', authmiddleware(), async (req, res) => {
     catch(err){
         return res.status(500).json({
             msg:"failed to fetch user service tickets",
+            error: err.message
+        })
+    }
+})
+
+router.get('/emi-installments', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id firstName lastName email');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const installments = await EmiInstallment.find({ patient: user._id })
+            .sort({ dueDate: 1 })
+            .populate('sale', 'brand model serialNumber finalAmount paidAmount dueAmount paymentMode')
+            .populate('payment', 'amount method referenceNumber paidAt');
+
+        return res.status(200).json({
+            user,
+            installments,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user emi installments",
             error: err.message
         })
     }
