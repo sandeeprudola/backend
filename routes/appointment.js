@@ -24,6 +24,46 @@ const updateAppointmentSchema = zod.object({
     paymentStatus: zod.enum(['pending','paid','partial','waived']).optional()
 });
 
+const availabilityQuerySchema = zod.object({
+    staffId: zod.string().trim().min(1),
+    date: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be in YYYY-MM-DD format'),
+    duration: zod.coerce.number().int().min(15).max(240).optional(),
+});
+
+const SLOT_INTERVAL_MINUTES = 30;
+const WORK_START_HOUR = 9;
+const WORK_END_HOUR = 20;
+
+router.get('/staff-list', async (req, res) => {
+    try {
+        const { role, q } = req.query;
+        const query = { isActive: true };
+
+        if (role && ['therapist', 'audiologist', 'receptionist'].includes(role)) {
+            query.role = role;
+        }
+
+        if (q) {
+            query.$or = [
+                { firstName: { $regex: q, $options: 'i' } },
+                { lastName: { $regex: q, $options: 'i' } },
+                { specialization: { $regex: q, $options: 'i' } },
+            ];
+        }
+
+        const staff = await Emp.find(query)
+            .select('firstName lastName role specialization')
+            .sort({ firstName: 1, lastName: 1 });
+
+        return res.status(200).json({ staff });
+    } catch (err) {
+        return res.status(500).json({
+            msg: 'failed to fetch staff list',
+            error: err.message,
+        });
+    }
+});
+
 function getAppointmentEndTime(appointmentDate, duration) {
     return new Date(appointmentDate.getTime() + duration * 60 * 1000);
 }
@@ -31,6 +71,24 @@ function getAppointmentEndTime(appointmentDate, duration) {
 function isWorkingHours(appointmentDate) {
     const hour = appointmentDate.getHours();
     return hour >= 9 && hour < 20;
+}
+
+function formatSlotTime(date) {
+    return date.toISOString().slice(11, 16);
+}
+
+function buildDayBounds(dateString) {
+    const dayStart = new Date(`${dateString}T00:00:00.000Z`);
+    if (Number.isNaN(dayStart.getTime())) {
+        return null;
+    }
+
+    const dayEnd = new Date(`${dateString}T23:59:59.999Z`);
+    return { dayStart, dayEnd };
+}
+
+function buildSlotStart(dateString, hour, minute) {
+    return new Date(`${dateString}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00.000Z`);
 }
 
 async function hasConflictingAppointment({ patientId, staffId, appointmentDate, duration }) {
@@ -53,6 +111,89 @@ async function hasConflictingAppointment({ patientId, staffId, appointmentDate, 
         return appointmentDate < existingEnd && proposedEnd > existingStart;
     });
 }
+
+router.get('/availability', async (req, res) => {
+    try {
+        const parsed = availabilityQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+            return res.status(400).json({
+                msg: 'invalid availability query',
+                errors: parsed.error.flatten(),
+            });
+        }
+
+        const { staffId, date, duration = 30 } = parsed.data;
+        const staff = await Emp.findById(staffId).select('_id firstName lastName role specialization isActive');
+        if (!staff || !staff.isActive) {
+            return res.status(404).json({ msg: 'active staff member not found' });
+        }
+
+        const dayBounds = buildDayBounds(date);
+        if (!dayBounds) {
+            return res.status(400).json({ msg: 'invalid date' });
+        }
+
+        const appointments = await Appointment.find({
+            staff: staff._id,
+            status: { $nin: ['canceled'] },
+            appointmentdate: {
+                $gte: dayBounds.dayStart,
+                $lte: dayBounds.dayEnd,
+            },
+        }).select('appointmentdate duration status');
+
+        const bookedSlots = [];
+        const availableSlots = [];
+
+        for (let hour = WORK_START_HOUR; hour < WORK_END_HOUR; hour += 1) {
+            for (let minute = 0; minute < 60; minute += SLOT_INTERVAL_MINUTES) {
+                const slotStart = buildSlotStart(date, hour, minute);
+                const slotEnd = getAppointmentEndTime(slotStart, duration);
+
+                if (slotEnd.getUTCHours() > WORK_END_HOUR || (slotEnd.getUTCHours() === WORK_END_HOUR && slotEnd.getUTCMinutes() > 0)) {
+                    continue;
+                }
+
+                const hasConflict = appointments.some((appointment) => {
+                    const existingStart = new Date(appointment.appointmentdate);
+                    const existingEnd = getAppointmentEndTime(existingStart, appointment.duration);
+                    return slotStart < existingEnd && slotEnd > existingStart;
+                });
+
+                const slotLabel = formatSlotTime(slotStart);
+                if (hasConflict) {
+                    bookedSlots.push(slotLabel);
+                } else {
+                    availableSlots.push(slotLabel);
+                }
+            }
+        }
+
+        return res.status(200).json({
+            staff: {
+                _id: staff._id,
+                firstName: staff.firstName,
+                lastName: staff.lastName,
+                role: staff.role,
+                specialization: staff.specialization,
+            },
+            date,
+            duration,
+            workingHours: {
+                start: '09:00',
+                end: '20:00',
+                slotIntervalMinutes: SLOT_INTERVAL_MINUTES,
+            },
+            bookedSlots,
+            availableSlots,
+        });
+    } catch (err) {
+        return res.status(500).json({
+            msg: 'failed to fetch availability',
+            error: err.message,
+        });
+    }
+});
 
 router.post("/user",auth(),async(req,res)=>{
     try{

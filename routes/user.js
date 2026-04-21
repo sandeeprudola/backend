@@ -123,6 +123,23 @@ router.put("/update",authmiddleware(),async(req,res)=>{
 
 })
 
+router.get('/me', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id username email firstName lastName role');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        return res.status(200).json({ user });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user profile",
+            error: err.message
+        })
+    }
+})
+
 router.get("/dashboard",authmiddleware(),async(req,res)=>{
     try{
         const user = await User.findById(req.user.id)
@@ -153,6 +170,32 @@ router.get("/dashboard",authmiddleware(),async(req,res)=>{
     catch(err){
         res.status(500).json({
             msg:"internal server error"
+        })
+    }
+})
+
+router.get('/appointments', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const query = { patient: user._id };
+        if (req.query.status) {
+            query.status = req.query.status;
+        }
+
+        const appointments = await Appointment.find(query)
+            .sort({ appointmentdate: 1 })
+            .populate('staff', 'firstName lastName email role specialization');
+
+        return res.status(200).json({ appointments });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user appointments",
+            error: err.message
         })
     }
 })
