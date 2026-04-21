@@ -4,6 +4,7 @@ const Appointment=require("../models/Appointment")
 const Sale = require('../models/Sale');
 const PatientProfile = require('../models/PatientProfile');
 const Emp = require('../models/Emp');
+const Payment = require('../models/Payment');
 const {JWT_SECRET}=require('../config')
 const router=express.Router();
 const zod= require('zod')
@@ -360,6 +361,32 @@ router.get('/sales', authmiddleware(), async (req, res) => {
     catch(err){
         return res.status(500).json({
             msg:"failed to fetch user sales",
+            error: err.message
+        })
+    }
+})
+
+router.get('/payments', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id firstName lastName email');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const payments = await Payment.find({ patient: user._id })
+            .sort({ paidAt: -1, createdAt: -1 })
+            .populate('sale', 'brand model serialNumber finalAmount paidAmount dueAmount paymentMode')
+            .populate('collectedByEmp', 'firstName lastName role')
+            .populate('collectedByAdmin', 'firstName lastName role');
+
+        return res.status(200).json({
+            user,
+            payments,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user payments",
             error: err.message
         })
     }
