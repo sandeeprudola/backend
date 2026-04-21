@@ -9,6 +9,7 @@ const sale=require("./sale")
 const patient=require("./patient")
 const payment=require("./payment")
 const serviceTicket=require("./serviceTicket")
+const reminder=require("./reminder")
 
 const router=express.Router();
 
@@ -22,5 +23,6 @@ router.use("/sale",sale)
 router.use("/patients",patient)
 router.use("/payments",payment)
 router.use("/service-tickets",serviceTicket)
+router.use("/reminders",reminder)
 
 module.exports=router;
