@@ -12,6 +12,7 @@ const serviceTicket=require("./serviceTicket")
 const reminder=require("./reminder")
 const emi=require("./emi")
 const report=require("./report")
+const lead=require("./lead")
 
 const router=express.Router();
 
@@ -28,5 +29,6 @@ router.use("/service-tickets",serviceTicket)
 router.use("/reminders",reminder)
 router.use("/emi",emi)
 router.use("/reports",report)
+router.use("/leads",lead)
 
 module.exports=router;

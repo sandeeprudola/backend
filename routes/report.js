@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
 const Appointment = require('../models/Appointment');
 const Emp = require('../models/Emp');
+const Lead = require('../models/Lead');
 const Payment = require('../models/Payment');
 const Sale = require('../models/Sale');
 const User = require('../models/User');
@@ -76,6 +77,8 @@ router.get('/monthly', reportAccess, async (req, res) => {
             appointmentCount,
             completedAppointmentCount,
             saleAmountAgg,
+            leadCount,
+            convertedLeadCount,
         ] = await Promise.all([
             Payment.aggregate([
                 { $match: { paidAt: { $gte: start, $lte: end } } },
@@ -95,6 +98,8 @@ router.get('/monthly', reportAccess, async (req, res) => {
                 { $match: { saleDate: { $gte: start, $lte: end } } },
                 { $group: { _id: null, totalSalesValue: { $sum: '$finalAmount' }, totalDue: { $sum: '$dueAmount' }, totalPaidOnSales: { $sum: '$paidAmount' } } },
             ]),
+            Lead.countDocuments({ createdAt: { $gte: start, $lte: end } }),
+            Lead.countDocuments({ convertedAt: { $gte: start, $lte: end }, status: 'converted' }),
         ]);
 
         const totalRevenue = revenueAgg[0]?.totalRevenue || 0;
@@ -114,7 +119,10 @@ router.get('/monthly', reportAccess, async (req, res) => {
                 totalDue,
             },
             conversion: {
-                note: 'Lead model is not built yet, so conversion is calculated using available data.',
+                note: 'Lead conversion uses Lead records when available. Patient/sale and appointment/sale rates are included as supporting metrics.',
+                leadCount,
+                convertedLeadCount,
+                leadToPatientRate: leadCount ? Number(((convertedLeadCount / leadCount) * 100).toFixed(2)) : 0,
                 newPatients,
                 salesCount,
                 appointmentCount,
