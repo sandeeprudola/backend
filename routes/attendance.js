@@ -13,6 +13,111 @@ function startOfDay(dateLike) {
     return d;
 }
 
+function endOfDay(dateLike) {
+    const d = dateLike ? new Date(dateLike) : new Date();
+    d.setHours(23, 59, 59, 999);
+    return d;
+}
+
+function parsePagination(req) {
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
+    return { page, limit, skip: (page - 1) * limit };
+}
+
+router.get('/admin/list', adminAuth, async (req, res) => {
+    try {
+        const { page, limit, skip } = parsePagination(req);
+        const { employeeId, status, from, to, q } = req.query;
+
+        const query = {};
+        if (employeeId) query.employee = employeeId;
+        if (status) query.status = status;
+        if (from || to) {
+            query.date = Object.assign(
+                {},
+                from && { $gte: startOfDay(from) },
+                to && { $lte: endOfDay(to) },
+            );
+        }
+
+        let employeeIds;
+        if (q) {
+            const employees = await Emp.find({
+                $or: [
+                    { firstName: { $regex: q, $options: 'i' } },
+                    { lastName: { $regex: q, $options: 'i' } },
+                    { email: { $regex: q, $options: 'i' } },
+                    { username: { $regex: q, $options: 'i' } },
+                    { role: { $regex: q, $options: 'i' } },
+                    { specialization: { $regex: q, $options: 'i' } },
+                ],
+            }).select('_id');
+            employeeIds = employees.map((employee) => employee._id);
+            query.employee = employeeId
+                ? employeeId
+                : { $in: employeeIds };
+        }
+
+        const todayStart = startOfDay();
+        const todayEnd = endOfDay();
+
+        const [items, total, todayRecords, activeEmployees] = await Promise.all([
+            Attendance.find(query)
+                .sort({ date: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .populate('employee', 'firstName lastName email role specialization isActive')
+                .populate('overriddenBy', 'firstName lastName role'),
+            Attendance.countDocuments(query),
+            Attendance.find({ date: { $gte: todayStart, $lte: todayEnd } })
+                .populate('employee', 'firstName lastName email role specialization isActive')
+                .sort({ checkInTime: -1, createdAt: -1 }),
+            Emp.find({ isActive: true })
+                .select('firstName lastName email role specialization isActive')
+                .sort({ firstName: 1, lastName: 1 }),
+        ]);
+
+        const todayByEmployee = new Map(
+            todayRecords
+                .filter((record) => record.employee)
+                .map((record) => [record.employee._id.toString(), record]),
+        );
+
+        const todayStatus = activeEmployees.map((employee) => {
+            const record = todayByEmployee.get(employee._id.toString());
+            return {
+                employee,
+                attendance: record || null,
+                status: record?.status || 'not-marked',
+                checkInTime: record?.checkInTime,
+                checkOutTime: record?.checkOutTime,
+            };
+        });
+
+        const presentToday = todayStatus.filter((item) => item.status === 'present').length;
+        const absentToday = todayStatus.filter((item) => item.status === 'absent').length;
+        const notMarkedToday = todayStatus.filter((item) => item.status === 'not-marked').length;
+
+        return res.status(200).json({
+            page,
+            limit,
+            total,
+            items,
+            todayStatus,
+            summary: {
+                activeEmployees: activeEmployees.length,
+                presentToday,
+                absentToday,
+                notMarkedToday,
+            },
+        });
+    } catch (err) {
+        console.error('Admin attendance list error:', err);
+        return res.status(500).json({ msg: 'failed to fetch attendance', error: err.message });
+    }
+});
+
 /**
  * Employee check-in
  * Requires staff token (therapist / audiologist / receptionist)
@@ -198,4 +303,3 @@ router.put('/admin/attendance/:id', adminAuth, async (req, res) => {
 });
 
 module.exports = router;
-

@@ -8,6 +8,7 @@ const Payment = require('../models/Payment');
 const ServiceTicket = require('../models/ServiceTicket');
 const EmiInstallment = require('../models/EmiInstallment');
 const {JWT_SECRET}=require('../config')
+const { HEARING_SERVICES, SPEECH_SERVICES } = require('../constants/serviceCatalog')
 const router=express.Router();
 const zod= require('zod')
 const bcrypt=require('bcryptjs')
@@ -82,6 +83,57 @@ function buildProfilePayload(data) {
     return payload;
 }
 
+function addMonths(date, monthsToAdd) {
+    const result = new Date(date);
+    result.setMonth(result.getMonth() + monthsToAdd);
+    return result;
+}
+
+function buildSyntheticEmiInstallments(sale) {
+    if (!sale || sale.paymentMode !== 'emi' || !sale.emiPlan?.totalInstallments || sale.dueAmount <= 0) {
+        return [];
+    }
+
+    const totalInstallments = sale.emiPlan.totalInstallments;
+    const startDate = sale.emiPlan.nextDueDate || sale.saleDate || new Date();
+    const defaultInstallmentAmount = sale.emiPlan.installmentAmount || Math.ceil(sale.dueAmount / totalInstallments);
+    const installments = [];
+    let remaining = sale.dueAmount;
+
+    for (let installmentNumber = 1; installmentNumber <= totalInstallments && remaining > 0; installmentNumber += 1) {
+        const amount = installmentNumber === totalInstallments
+            ? remaining
+            : Math.min(defaultInstallmentAmount, remaining);
+
+        installments.push({
+            _id: `synthetic-${sale._id}-${installmentNumber}`,
+            patient: sale.patient,
+            sale: {
+                _id: sale._id,
+                brand: sale.brand,
+                model: sale.model,
+                serialNumber: sale.serialNumber,
+                finalAmount: sale.finalAmount,
+                paidAmount: sale.paidAmount,
+                dueAmount: sale.dueAmount,
+                paymentMode: sale.paymentMode,
+            },
+            installmentNumber,
+            amount,
+            dueDate: addMonths(startDate, installmentNumber - 1),
+            status: 'pending',
+            paidAt: null,
+            payment: null,
+            note: 'Generated from EMI sale plan',
+            isSynthetic: true,
+        });
+
+        remaining -= amount;
+    }
+
+    return installments;
+}
+
 
 const signupSchema=zod.object({
     username:zod.string(),
@@ -90,8 +142,8 @@ const signupSchema=zod.object({
     firstName:zod.string(),
     lastName:zod.string(),
     role: zod.enum(["hearing","speech","both"]),
-    HearingServices:zod.enum(['None','a','b','c']),
-    SpeechServices:zod.enum(['None','a','b','c']),
+    HearingServices:zod.enum(HEARING_SERVICES),
+    SpeechServices:zod.enum(SPEECH_SERVICES),
 })
 
 router.post("/signup",async(req,res)=>{
@@ -101,8 +153,7 @@ router.post("/signup",async(req,res)=>{
         return res.status(411).json({message: "email taken /wrong credentials"})
     }
     const existinguser=await User.findOne({
-        username:req.body.username,
-        email: body.email 
+        $or: [{ username:req.body.username }, { email: body.email }]
     })
     if(existinguser){
         return res.status(411).json("email/username already taken or incorrect credentials")
@@ -135,30 +186,39 @@ router.post("/signup",async(req,res)=>{
 })
 
 
+const emptyToUndefined = (value) =>
+    typeof value === 'string' && value.trim() === '' ? undefined : value;
+
  const signinSchema=zod.object({
-    username:zod.string(),
-    email:zod.string(),
-    password:zod.string(),
+    username:zod.preprocess(emptyToUndefined, zod.string().trim().optional()),
+    email:zod.preprocess(emptyToUndefined, zod.string().trim().email().optional()),
+    password:zod.string().min(1),
+ }).refine((data) => data.username || data.email, {
+    message: 'username or email is required',
  })
 
 router.post("/signin",async(req,res)=>{
     const body=req.body;
-    const {success}=signinSchema.safeParse(body);
-    if(!success){
+    const parsed=signinSchema.safeParse(body);
+    if(!parsed.success){
         return res.status(411).json({msg: "wrong info / email already taken"})
     }
-    const user=await User.findOne({
-        username:req.body.username,
-        email:req.body.email
-    })
+    const lookup = [];
+    if (parsed.data.username) lookup.push({ username: parsed.data.username });
+    if (parsed.data.email) lookup.push({ email: parsed.data.email });
+
+    const user=await User.findOne({ $or: lookup })
 
     if(user){
         const isPassvalid=await bcrypt.compare(body.password,user.password);
         if(!isPassvalid){
-            res.status(411).json({msg:"wrong credentials"});
+            return res.status(411).json({msg:"wrong credentials"});
         }
         const token=jwt.sign({
             userId:user._id,
+            role:user.role,
+            HearingServices:user.HearingServices,
+            SpeechServices:user.SpeechServices,
         },JWT_SECRET);
         
         res.status(200).json({
@@ -168,6 +228,8 @@ router.post("/signin",async(req,res)=>{
         })
         return;
     }
+
+    return res.status(401).json({msg:"user not found"})
 
 })
 
@@ -183,7 +245,7 @@ router.put("/update",authmiddleware(),async(req,res)=>{
         return res.status(401).json({msg:"updation failed"})
     }
     await User.updateOne(
-        {_id:req.user_id},
+        {_id:req.user.id},
         {$set:req.body}
     )
     res.json({
@@ -442,14 +504,167 @@ router.get('/emi-installments', authmiddleware(), async (req, res) => {
             .populate('sale', 'brand model serialNumber finalAmount paidAmount dueAmount paymentMode')
             .populate('payment', 'amount method referenceNumber paidAt');
 
+        const sales = await Sale.find({
+            patient: user._id,
+            paymentMode: 'emi',
+            dueAmount: { $gt: 0 },
+        })
+            .sort({ saleDate: 1, createdAt: 1 })
+            .select('patient brand model serialNumber finalAmount paidAmount dueAmount paymentMode saleDate emiPlan');
+
+        const salesWithInstallments = new Set(
+            installments
+                .map((installment) => installment.sale?._id?.toString?.() || installment.sale?.toString?.())
+                .filter(Boolean)
+        );
+
+        const syntheticInstallments = sales.flatMap((sale) => (
+            salesWithInstallments.has(String(sale._id))
+                ? []
+                : buildSyntheticEmiInstallments(sale)
+        ));
+
+        const mergedInstallments = [...installments, ...syntheticInstallments]
+            .sort((left, right) => new Date(left.dueDate).getTime() - new Date(right.dueDate).getTime());
+
         return res.status(200).json({
             user,
-            installments,
+            installments: mergedInstallments,
         });
     }
     catch(err){
         return res.status(500).json({
             msg:"failed to fetch user emi installments",
+            error: err.message
+        })
+    }
+})
+
+router.get('/reminders', authmiddleware(), async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('_id firstName lastName email');
+        if (!user) {
+            return res.status(404).json({ msg: 'user not found' });
+        }
+
+        const now = new Date();
+        const horizon = req.query.days
+            ? Math.min(Math.max(parseInt(req.query.days, 10), 1), 365)
+            : 45;
+        const until = new Date(now);
+        until.setDate(until.getDate() + horizon);
+
+        const [profile, serviceTickets, warrantyReminders, amcReminders, emiInstallments] = await Promise.all([
+            PatientProfile.findOne({
+                user: user._id,
+                nextFollowUpDate: { $gte: now, $lte: until },
+                caseStatus: { $ne: 'completed' },
+            }),
+            ServiceTicket.find({
+                patient: user._id,
+                dueDate: { $gte: now, $lte: until },
+                status: { $nin: ['resolved', 'cancelled'] },
+            })
+                .sort({ dueDate: 1 })
+                .populate('sale', 'brand model serialNumber'),
+            Sale.find({
+                patient: user._id,
+                warrantyExpiryDate: { $gte: now, $lte: until },
+            }).sort({ warrantyExpiryDate: 1 }),
+            Sale.find({
+                patient: user._id,
+                amcExpiryDate: { $gte: now, $lte: until },
+            }).sort({ amcExpiryDate: 1 }),
+            EmiInstallment.find({
+                patient: user._id,
+                dueDate: { $gte: now, $lte: until },
+                status: { $in: ['pending', 'overdue'] },
+            })
+                .sort({ dueDate: 1 })
+                .populate('sale', 'brand model serialNumber finalAmount paidAmount dueAmount paymentMode'),
+        ]);
+
+        const reminders = [];
+
+        if (profile?.nextFollowUpDate) {
+            reminders.push({
+                id: `follow-up-${profile._id}`,
+                type: 'follow-up',
+                title: 'Care follow-up',
+                dueDate: profile.nextFollowUpDate,
+                status: profile.caseStatus || 'active',
+                detail: profile.primaryConcern || profile.diagnosis || 'Scheduled patient follow-up',
+            });
+        }
+
+        serviceTickets.forEach((ticket) => {
+            reminders.push({
+                id: `ticket-${ticket._id}`,
+                type: 'service-ticket',
+                title: ticket.title,
+                dueDate: ticket.dueDate,
+                status: ticket.status,
+                detail: ticket.sale
+                    ? `${ticket.sale.brand} ${ticket.sale.model}`.trim()
+                    : ticket.type,
+            });
+        });
+
+        warrantyReminders.forEach((sale) => {
+            reminders.push({
+                id: `warranty-${sale._id}`,
+                type: 'warranty',
+                title: 'Warranty expiry',
+                dueDate: sale.warrantyExpiryDate,
+                status: 'upcoming',
+                detail: `${sale.brand} ${sale.model}`.trim(),
+            });
+        });
+
+        amcReminders.forEach((sale) => {
+            reminders.push({
+                id: `amc-${sale._id}`,
+                type: 'amc',
+                title: 'AMC expiry',
+                dueDate: sale.amcExpiryDate,
+                status: 'upcoming',
+                detail: `${sale.brand} ${sale.model}`.trim(),
+            });
+        });
+
+        emiInstallments.forEach((installment) => {
+            reminders.push({
+                id: `emi-${installment._id}`,
+                type: 'emi',
+                title: `EMI installment #${installment.installmentNumber}`,
+                dueDate: installment.dueDate,
+                status: installment.status,
+                amount: installment.amount,
+                detail: installment.sale
+                    ? `${installment.sale.brand} ${installment.sale.model}`.trim()
+                    : 'Device EMI',
+            });
+        });
+
+        reminders.sort((left, right) => new Date(left.dueDate).getTime() - new Date(right.dueDate).getTime());
+
+        return res.status(200).json({
+            user,
+            range: { from: now, to: until, days: horizon },
+            summary: {
+                total: reminders.length,
+                followUps: reminders.filter((item) => item.type === 'follow-up').length,
+                serviceTickets: reminders.filter((item) => item.type === 'service-ticket').length,
+                warranty: reminders.filter((item) => item.type === 'warranty').length,
+                amc: reminders.filter((item) => item.type === 'amc').length,
+                emi: reminders.filter((item) => item.type === 'emi').length,
+            },
+            reminders,
+        });
+    }
+    catch(err){
+        return res.status(500).json({
+            msg:"failed to fetch user reminders",
             error: err.message
         })
     }

@@ -1,6 +1,5 @@
 const mongoose=require('mongoose')
-const { string, minLength, maxLength } = require('zod')
-const { required } = require('zod/mini')
+const { HEARING_SERVICES, SPEECH_SERVICES } = require('../constants/serviceCatalog')
 
 const UserSchema=new mongoose.Schema({
     username:{
@@ -43,12 +42,12 @@ const UserSchema=new mongoose.Schema({
     },
     HearingServices:{
         type:String,
-        enum:['None','a','b','c'],
+        enum:HEARING_SERVICES,
         required:true,
     },
     SpeechServices:{
         type:String,
-        enum:['None','a','b','c'],
+        enum:SPEECH_SERVICES,
         required:true,
     }
 },{timestamps:true})

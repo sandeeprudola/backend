@@ -11,6 +11,7 @@ const Lead = require('../models/Lead');
 const PatientProfile = require('../models/PatientProfile');
 const User = require('../models/User');
 const { JWT_SECRET } = require('../config');
+const { HEARING_SERVICES, SPEECH_SERVICES } = require('../constants/serviceCatalog');
 
 const router = express.Router();
 
@@ -38,8 +39,8 @@ const convertLeadSchema = zod.object({
     email: zod.string().trim().email().optional(),
     password: zod.string().min(6).optional(),
     role: zod.enum(['hearing', 'speech', 'both']).optional(),
-    HearingServices: zod.enum(['None', 'a', 'b', 'c']).optional(),
-    SpeechServices: zod.enum(['None', 'a', 'b', 'c']).optional(),
+    HearingServices: zod.enum(HEARING_SERVICES).optional(),
+    SpeechServices: zod.enum(SPEECH_SERVICES).optional(),
 });
 
 function parsePagination(req) {
@@ -134,6 +135,14 @@ function leadInterestToPatientRole(interest) {
         return interest;
     }
     return 'hearing';
+}
+
+function getDefaultHearingService(patientRole) {
+    return patientRole === 'speech' ? 'None' : 'Hearing Assessment';
+}
+
+function getDefaultSpeechService(patientRole) {
+    return patientRole === 'hearing' ? 'None' : 'Speech Assessment';
 }
 
 function makeUsername(lead) {
@@ -329,8 +338,8 @@ router.post('/:id/convert', canWriteLeads, async (req, res) => {
             firstName: lead.firstName,
             lastName: lead.lastName || '',
             role: patientRole,
-            HearingServices: data.HearingServices || (patientRole === 'speech' ? 'None' : 'a'),
-            SpeechServices: data.SpeechServices || (patientRole === 'hearing' ? 'None' : 'a'),
+            HearingServices: data.HearingServices || getDefaultHearingService(patientRole),
+            SpeechServices: data.SpeechServices || getDefaultSpeechService(patientRole),
         });
 
         const profile = await PatientProfile.create({
